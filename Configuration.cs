@@ -6,10 +6,10 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace SidaiDataTools.Shared.Configuration
+namespace NShared.Configuration
 {
     public delegate void OnConfChange(ConfItem value);
-    class Configuration
+    public class Configuration
     {
         string filename;
         public Configuration(string filename )
@@ -32,19 +32,20 @@ namespace SidaiDataTools.Shared.Configuration
         /// <typeparam name="T">Enum type of configuration</typeparam>
         /// <param name="enumItem">Enum value that represents the desired configuration</param>
         /// <param name="value">The new value of configuratio. The allowed types are string, bool, int and double</param>
-        public void set<T>(T enumItem, object value)
+        public void set<T>(T enumItem, object value, bool justMemory = false)
         {
             //chekcs if the configuration is an enum
             string name = GetConfName<T>(enumItem);
-            this.set(name, value);
+            this.set(name, value, justMemory);
         }
 
-        public void set(string name, object value)
+        public void set(string name, object value, bool justMemory = false)
         {
             name = name.ToLower();
             //chekcs if the configuration is an enum
             ConfItem conf = new ConfItem();
-            conf.TrySet(value);
+            conf.Set(value);
+            conf.justMemory = justMemory;
             confs[name] = conf;
             WriteFile();
             NotifyConfObservers(name);
@@ -79,11 +80,34 @@ namespace SidaiDataTools.Shared.Configuration
                 if (!confs.ContainsKey(name))
                 {
                     ConfItem newConf = new ConfItem();
-                    newConf.TrySet(defaultValue);
+                    newConf.Set(defaultValue);
                     confs[name] = newConf;
                     WriteFile();
                 }
                 return confs[name];
+            }
+        }
+
+        public T get<T>(string name, object defaultValue = null)
+        {
+            name = name.ToLower();
+            //verify if the ram contains the variable
+            if (confs.ContainsKey(name))
+                return confs[name].AsT<T>();
+            else
+            {
+                //load file to ram
+                ReadFile();
+
+                //recheck the ram
+                if (!confs.ContainsKey(name))
+                {
+                    ConfItem newConf = new ConfItem();
+                    newConf.Set(defaultValue);
+                    confs[name] = newConf;
+                    WriteFile();
+                }
+                return confs[name].AsT<T>();
             }
         }
 
@@ -99,6 +123,9 @@ namespace SidaiDataTools.Shared.Configuration
                     lines = File.ReadAllLines(this.filename).ToList();
                 for (int cConfs = 0; cConfs < confs.Count; cConfs++)
                 {
+                    if (confs.ElementAt(cConfs).Value.justMemory)
+                        continue;
+
                     bool finded = false;
                     for (int cLines = 0; cLines < lines.Count; cLines++)
                     {
@@ -210,7 +237,7 @@ namespace SidaiDataTools.Shared.Configuration
             if (defaultValueToFirstTimeInvoke == null)
                 defaultValueToFirstTimeInvoke = "";
 
-            string name = GetConfName(enumItem);
+            string name = GetConfName(enumItem).ToLower();
 
             if (!confsObservers.ContainsKey(name))
                 confsObservers[name] = new List<OnConfChange>();
@@ -230,6 +257,7 @@ namespace SidaiDataTools.Shared.Configuration
 
         public OnConfChange ObservateConfiguration(string confName, OnConfChange onChange, bool invokeFirstTime = true, object defaultValueToFirstTimeInvoke = null)
         {
+            confName = confName.ToLower();
             if (defaultValueToFirstTimeInvoke == null)
                 defaultValueToFirstTimeInvoke = "";
             
@@ -251,23 +279,31 @@ namespace SidaiDataTools.Shared.Configuration
         }
 
 
+        Semaphore monitorSemaphore1 = new Semaphore(1, 10);
+        Semaphore monitorSemaphore2 = new Semaphore(1, 10);
+        int startedReaders = 0;
         private void StartFileMonitor()
         {
+            monitorSemaphore1.WaitOne();
             if (fileMonitorTimer == null)
             {
                 object state = new object();
                 lastFileChangeTime = File.GetLastWriteTime(this.filename);
+                startedReaders++;
                 fileMonitorTimer = new Timer(delegate (object state2)
                 {
+                    monitorSemaphore2.WaitOne();
                     if (File.GetLastWriteTime(this.filename).ToString() != lastFileChangeTime.ToString())
                     {
                         ReadFile();
                         lastFileChangeTime = File.GetLastWriteTime(this.filename);
                     }
+                    monitorSemaphore2.Release();
 
                 }, state, 0, 50);
 
             }
+            monitorSemaphore1.Release();
         }
 
 

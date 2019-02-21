@@ -1,20 +1,23 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace SidaiDataTools.Shared.Configuration
+namespace NShared.Configuration
 {
     public class ConfItem
     {
-        public string _value;
+        public object _value;
+
+        public bool justMemory = false;
 
         public int AsInt
         {
             get
             {
-                return int.Parse(this._value);
+                return int.Parse(this.AsString);
             }
 
             set
@@ -27,7 +30,10 @@ namespace SidaiDataTools.Shared.Configuration
         {
             get
             {
-                return this._value;
+                if (_value is string)
+                    return (string)_value;
+                else 
+                    return _value.ToString();
             }
             set
             {
@@ -39,7 +45,7 @@ namespace SidaiDataTools.Shared.Configuration
         {
             get
             {
-                return double.Parse(this._value.Replace(".", CultureInfo.CurrentCulture.NumberFormat.CurrencyDecimalSeparator).Replace(",", CultureInfo.CurrentCulture.NumberFormat.CurrencyDecimalSeparator));
+                return double.Parse(this.AsString.Replace(".", CultureInfo.CurrentCulture.NumberFormat.CurrencyDecimalSeparator).Replace(",", CultureInfo.CurrentCulture.NumberFormat.CurrencyDecimalSeparator));
             }
             set
             {
@@ -51,7 +57,7 @@ namespace SidaiDataTools.Shared.Configuration
         {
             get
             {
-                if ((_value == "1") || (_value.ToLower() == "true"))
+                if ((AsString == "1") || (AsString.ToLower() == "true"))
                     return true;
                 else
                     return false;
@@ -62,7 +68,25 @@ namespace SidaiDataTools.Shared.Configuration
             }
         }
 
-        public void TrySet(object value)
+        public T AsT<T>()
+        {
+            if (_value is T)
+                return (T)_value;
+            else
+            {
+                var parseMethod = _value.GetType().GetMethod("Parse");
+                if (parseMethod != null)
+                    return (T)parseMethod.Invoke(null, new object[] { AsString });
+                else
+                {
+                    throw new InvalidCastException("Cant convert an " + _value.GetType().ToString() + " to desired type");
+                }
+            }
+        }
+
+
+
+        public void Set(object value)
         {
             if (value is string)
                 AsString = (string)value;
@@ -73,7 +97,9 @@ namespace SidaiDataTools.Shared.Configuration
             else if (value is bool)
                 AsBoolean = (bool)value;
             else
-                throw new InvalidCastException("Invalid value type");
+                _value = value;
+
+                //throw new InvalidCastException("Invalid value type");
         }
     }
 }
