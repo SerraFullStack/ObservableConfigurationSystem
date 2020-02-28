@@ -12,12 +12,17 @@ namespace NShared.Configuration
     public class Configuration
     {
         string filename;
-        public Configuration(string filename )
+        public Configuration(string filename)
         {
+            readFileCurrentFunction = _ReadFileDefault;
+            writeFileCurrentFunction = _WriteFileDefault;
             this.filename = filename;
 
-            if (!Directory.Exists(Path.GetDirectoryName(filename)))
-                Directory.CreateDirectory(Path.GetDirectoryName(filename));
+            if (filename != "")
+            {
+                if (!Directory.Exists(Path.GetDirectoryName(filename)))
+                    Directory.CreateDirectory(Path.GetDirectoryName(filename));
+            }
         }
 
         Dictionary<string, ConfItem> confs = new Dictionary<string, ConfItem>();
@@ -111,21 +116,39 @@ namespace NShared.Configuration
             }
         }
 
-
         Semaphore WriteFileSempahore = new Semaphore(1, int.MaxValue);
+
+        #region write file system
+        public delegate void WriteFileDelegate(string fileName, Dictionary<string, ConfItem> confsToWrite);
+        private WriteFileDelegate writeFileCurrentFunction;
+
         private void WriteFile()
+        {
+
+            //prepare a confs to be saved (confs with justMemory ones)
+            Dictionary<string, ConfItem> confsToWrite = new Dictionary<string, ConfItem>();
+            foreach(var c in this.confs)
+            {
+                if (!c.Value.justMemory)
+                    confsToWrite[c.Key] = c.Value;
+            }
+
+            this.writeFileCurrentFunction(this.filename, confsToWrite);
+            confsToWrite.Clear();
+
+        }
+
+        private void _WriteFileDefault(string fileName, Dictionary<string, ConfItem> confsToWrite)
         {
             Thread th = new Thread(delegate ()
             {
                 WriteFileSempahore.WaitOne();
                 List<string> lines = new List<string>();
-                if (File.Exists(this.filename))
-                    lines = File.ReadAllLines(this.filename).ToList();
-                for (int cConfs = 0; cConfs < confs.Count; cConfs++)
-                {
-                    if (confs.ElementAt(cConfs).Value.justMemory)
-                        continue;
+                if (File.Exists(filename))
+                    lines = File.ReadAllLines(fileName).ToList();
 
+                for (int cConfs = 0; cConfs < confsToWrite.Count; cConfs++)
+                {
                     bool finded = false;
                     for (int cLines = 0; cLines < lines.Count; cLines++)
                     {
@@ -142,7 +165,7 @@ namespace NShared.Configuration
                                 name = name.Replace('_', '.');
 
                                 //checks if conf is the current confs
-                                if (name.ToLower() == confs.ElementAt(cConfs).Key.ToLower())
+                                if (name.ToLower() == confsToWrite.ElementAt(cConfs).Key.ToLower())
                                 {
                                     //replace only text after '=' to maintain a possiblie identation
                                     lines[cLines] = lines[cLines].Substring(0, lines[cLines].IndexOf('=') + 1) + " " + confs.ElementAt(cConfs).Value.AsString;
@@ -156,24 +179,54 @@ namespace NShared.Configuration
 
                     //if the configuration is not finded, add its to end of file
                     if (!finded)
-                        lines.Add(confs.ElementAt(cConfs).Key + " = " + confs.ElementAt(cConfs).Value.AsString);
+                        lines.Add(confsToWrite.ElementAt(cConfs).Key + " = " + confsToWrite.ElementAt(cConfs).Value.AsString);
                 }
 
                 //write the file
-                File.WriteAllLines(this.filename, lines.ToArray());
+                File.WriteAllLines(filename, lines.ToArray());
                 WriteFileSempahore.Release();
             });
             th.Start();
         }
 
+
+        public void setWriteFunction(WriteFileDelegate newFunction)
+        {
+            this.writeFileCurrentFunction = newFunction;
+        }
+        #endregion
+
+        #region read file system
+        public delegate Dictionary<string, ConfItem> ReadFileDelegate(string fileName);
+        private ReadFileDelegate readFileCurrentFunction;
         private void ReadFile()
         {
 
-            WriteFileSempahore.WaitOne();
+            //get new confs
+            var oldConfs = this.confs;
+            this.confs = this.readFileCurrentFunction(this.filename);
 
+            foreach (var curr in this.confs)
+            {
+                if (!oldConfs.ContainsKey(curr.Key) ||oldConfs[curr.Key] != curr.Value)
+                    //notify observers about the change of variable
+                    NotifyConfObservers(curr.Key);
+            }
+
+            //clear old confs
+            foreach (var curr in oldConfs)
+                curr.Value._value = null;
+
+            oldConfs.Clear();
+        }
+
+        Dictionary<string, ConfItem> _ReadFileDefault(string fileName)
+        {
+            Dictionary<string, ConfItem> result = new Dictionary<string, ConfItem>();
+            WriteFileSempahore.WaitOne();
             List<string> lines = new List<string>();
-            if (File.Exists(this.filename))
-                lines = File.ReadAllLines(this.filename).ToList();
+            if (File.Exists(fileName))
+                lines = File.ReadAllLines(fileName).ToList();
 
 
             for (int cLines = 0; cLines < lines.Count; cLines++)
@@ -191,31 +244,21 @@ namespace NShared.Configuration
                         //take the value of variable
                         string value = lines[cLines].Substring(lines[cLines].IndexOf('=') + 1).TrimStart().TrimEnd().Trim();
 
-                        //checks if has change in variable
-                        if (this.confs.ContainsKey(name))
-                        {
-                            if (this.confs[name].AsString != value)
-                            {
-                                //store the value to ram
-                                this.confs[name] = new ConfItem { AsString = value };
-
-                                //notify observers about the change of variable
-                                NotifyConfObservers(name);
-                            }
-                        }
-                        else
-                        {
-                            //store the value to ram
-                            this.confs[name] = new ConfItem { AsString = value };
-                        }
-
+                        result[name] = new ConfItem { AsString = value };
                     }
                 }
             }
             
             //write the file
             WriteFileSempahore.Release();
+            return result;
         }
+
+        public void setReadFunction(ReadFileDelegate newFunction)
+        {
+            this.readFileCurrentFunction = newFunction;
+        }
+        #endregion
 
         private string GetConfName<T>(T enumItem)
         {
